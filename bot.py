@@ -9,6 +9,7 @@ Perintah:
   python bot.py posting          -> AI membuat 1 post dari topik.txt lalu memposting
   python bot.py balas            -> AI membalas komentar di post kamu + mention dari orang lain
   python bot.py cari             -> cari post orang lain berdasar kata kunci -> DRAF ke antrian
+  python bot.py pantau           -> post terbaru dari AKUN_DIPANTAU -> DRAF ke antrian
   python bot.py antrian          -> lihat draf balasan yang menunggu persetujuan
   python bot.py setujui <id>     -> kirim draf nomor <id>
   python bot.py tolak <id>       -> buang draf nomor <id>
@@ -62,6 +63,14 @@ POST_DIPANTAU = env("JUMLAH_POST_DIPANTAU", "5", int)
 BALAS_MENTION = env("BALAS_MENTION", "true", bool)
 KATA_KUNCI = [k.strip() for k in env("KATA_KUNCI", "").split(",") if k.strip()]
 MAX_DRAF_CARI = env("MAX_DRAF_CARI", "5", int)
+AKUN_DIPANTAU = [a.strip().lstrip("@") for a in env("AKUN_DIPANTAU", "").split(",") if a.strip()]
+POST_PER_AKUN = env("POST_PER_AKUN", "3", int)
+# Kirim otomatis balasan ke post akun yang dipantau (tanpa persetujuan manual)
+AUTO_KIRIM = env("AUTO_KIRIM", "false", bool)
+AUTO_PER_JALAN = env("AUTO_PER_JALAN", "2", int)
+AUTO_PER_HARI = env("AUTO_PER_HARI", "8", int)
+AUTO_PER_AKUN_HARI = env("AUTO_PER_AKUN_HARI", "1", int)
+AUTO_UMUR_MAKS_JAM = env("AUTO_UMUR_MAKS_JAM", "24", int)
 
 
 def log(*a):
@@ -315,7 +324,8 @@ def cmd_cek():
 
 
 IZIN_DIBUTUHKAN = ["threads_basic", "threads_content_publish", "threads_manage_replies",
-                   "threads_read_replies", "threads_manage_mentions", "threads_keyword_search"]
+                   "threads_read_replies", "threads_manage_mentions", "threads_profile_discovery",
+                   "threads_keyword_search"]
 
 
 def cmd_izin():
@@ -539,6 +549,92 @@ def cmd_cari():
     log(f"{dibuat} draf baru masuk antrian. Lihat dengan: python bot.py antrian")
 
 
+def _auto_terkirim(con, username=None):
+    """Jumlah balasan otomatis ke post orang lain sejak pukul 00.00 hari ini."""
+    awal = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    q = "SELECT COUNT(*) FROM antrian WHERE status='terkirim_auto' AND waktu>=?"
+    args = [awal]
+    if username:
+        q += " AND username=?"
+        args.append(username)
+    return con.execute(q, args).fetchone()[0]
+
+
+def cmd_pantau():
+    """Post terbaru dari AKUN_DIPANTAU -> balasan. AUTO_KIRIM=true: langsung dikirim
+    (dibatasi per jalan/hari/akun). AUTO_KIRIM=false: masuk antrian sebagai draf."""
+    if not AKUN_DIPANTAU:
+        sys.exit("Isi AKUN_DIPANTAU di .env, contoh: AKUN_DIPANTAU=akun1,akun2")
+    con = db()
+    m = me()
+    batas = AUTO_PER_JALAN if AUTO_KIRIM else MAX_DRAF_CARI
+    if AUTO_KIRIM:
+        sisa_hari = AUTO_PER_HARI - _auto_terkirim(con)
+        if sisa_hari <= 0:
+            log(f"Batas harian kirim otomatis ({AUTO_PER_HARI}) sudah tercapai. Lanjut besok.")
+            return
+        batas = min(batas, sisa_hari)
+    umur_maks = timedelta(hours=AUTO_UMUR_MAKS_JAM if AUTO_KIRIM else UMUR_MAKS_JAM)
+
+    akun_acak = AKUN_DIPANTAU[:]
+    random.shuffle(akun_acak)              # supaya tidak selalu akun yang sama duluan
+    dibuat = 0
+    for akun in akun_acak:
+        if dibuat >= batas:
+            break
+        if AUTO_KIRIM and _auto_terkirim(con, akun) >= AUTO_PER_AKUN_HARI:
+            continue                       # jangan "nyerbu" akun yang sama berkali-kali
+        try:
+            posts = th("GET", "/profile_posts", username=akun, limit=POST_PER_AKUN,
+                       fields="id,text,username,timestamp,permalink").get("data", [])
+        except RuntimeError as e:
+            log(f"@{akun} tidak bisa dibaca (butuh izin threads_profile_discovery, "
+                f"akun harus publik):", e)
+            continue
+        for h in posts:
+            if h.get("username", akun) == m["username"] or not h.get("text"):
+                continue
+            ts = h.get("timestamp")
+            if ts and datetime.now(timezone.utc) - parse_time(ts) > umur_maks:
+                continue
+            if con.execute("SELECT 1 FROM antrian WHERE target_id=?", (h["id"],)).fetchone():
+                continue
+            if sudah_dibalas(con, h["id"]):
+                continue
+            draf = buat_balasan(f"Post publik dari @{akun}", h["text"], akun)
+            if not draf:
+                continue
+            status = "menunggu"
+            if AUTO_KIRIM:
+                try:
+                    publish(draf, reply_to_id=h["id"])
+                except RuntimeError as e:
+                    log(f"Gagal kirim otomatis ke @{akun}, disimpan sebagai draf:", e)
+                else:
+                    if DRY_RUN:            # simulasi: jangan dicatat supaya nanti tetap dikirim
+                        dibuat += 1
+                        break
+                    status = "terkirim_auto"
+                    catat_balasan(con, h["id"], h["id"], akun, draf)
+                    log(f"Balas otomatis @{akun}: {draf[:80]}")
+            con.execute("INSERT INTO antrian (target_id, username, teks_asli, permalink, draf,"
+                        " status, waktu) VALUES (?,?,?,?,?,?,?)",
+                        (h["id"], akun, h["text"], h.get("permalink", ""), draf, status,
+                         datetime.now().isoformat()))
+            con.commit()
+            dibuat += 1
+            if AUTO_KIRIM:
+                if dibuat < batas and not DRY_RUN:
+                    time.sleep(random.uniform(90, 300))   # jeda acak antar komentar
+                break                      # maksimal 1 komentar per akun per jalan
+            if dibuat >= batas:
+                break
+    if AUTO_KIRIM:
+        log(f"Selesai. {dibuat} komentar otomatis. Hari ini: {_auto_terkirim(con)}/{AUTO_PER_HARI}.")
+    else:
+        log(f"{dibuat} draf baru masuk antrian. Lihat dengan: python bot.py antrian")
+
+
 def cmd_antrian():
     rows = db().execute("SELECT id, username, teks_asli, permalink, draf FROM antrian "
                         "WHERE status='menunggu' ORDER BY id").fetchall()
@@ -589,6 +685,8 @@ def main():
         cmd_balas()
     elif c == "cari":
         cmd_cari()
+    elif c == "pantau":
+        cmd_pantau()
     elif c == "antrian":
         cmd_antrian()
     elif c == "setujui" and len(sys.argv) > 2:
