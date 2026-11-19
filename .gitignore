@@ -1,0 +1,11 @@
+# rahasia & data bot - jangan di-push
+.env
+token.json
+bot.db
+bot.log
+
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc

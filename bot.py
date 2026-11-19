@@ -47,9 +47,12 @@ def env(name, default=None, cast=str):
 
 
 DRY_RUN = env("DRY_RUN", "true", bool)          # true = tidak benar-benar memposting
-AI_BASE_URL = env("AI_BASE_URL", "").rstrip("/")   # API OpenAI-compatible, mis. https://.../v1
-AI_API_KEY = env("AI_API_KEY", "")
+# Gateway AI kompatibel OpenAI (sama seperti wabot-app), mis. https://bankai.web.id/api
+# Chat dikirim ke {AI_BASE_URL}/v1/chat/completions. BASE_URL/API_KEY dipakai bila AI_* kosong.
+AI_BASE_URL = (env("AI_BASE_URL", "") or env("BASE_URL", "") or "").strip().rstrip("/")
+AI_API_KEY = (env("AI_API_KEY", "") or env("API_KEY", "") or "").strip()
 MODEL = env("AI_MODEL", "deepseek-v4.1-flash")
+AI_TIMEOUT = 45
 MAX_BALAS_PER_JALAN = env("MAX_BALAS_PER_JALAN", "8", int)
 MAX_BALAS_PER_ORANG = env("MAX_BALAS_PER_ORANG", "3", int)  # per utas, cegah debat tanpa akhir
 UMUR_MAKS_JAM = env("UMUR_KOMENTAR_MAKS_JAM", "48", int)
@@ -193,34 +196,73 @@ def masih_baru(item):
 
 
 # ---------------------------------------------------------------- AI
-def ai(system, prompt, max_tokens=400):
-    """Panggil AI lewat API format OpenAI (/chat/completions), mis. DeepSeek di bankAI."""
+def ai_endpoint(path):
+    return f"{AI_BASE_URL}{path}" if AI_BASE_URL.endswith("/v1") else f"{AI_BASE_URL}/v1{path}"
+
+
+def rapikan(teks):
+    """Threads tidak menampilkan markdown: buang <think>, **tebal**, judul #, dan blok kode."""
+    teks = re.sub(r"<think>.*?</think>", "", teks, flags=re.S | re.I)
+    teks = re.sub(r"```[a-zA-Z0-9]*\n?", "", teks)
+    teks = re.sub(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"\1", teks, flags=re.M)
+    teks = re.sub(r"^\s*[*•]\s+", "- ", teks, flags=re.M)
+    teks = re.sub(r"\*\*(.+?)\*\*", r"\1", teks)
+    teks = re.sub(r"__(.+?)__", r"\1", teks)
+    teks = re.sub(r"[ \t]+\n", "\n", teks)
+    teks = re.sub(r"\n{3,}", "\n\n", teks)
+    return teks.strip()
+
+
+def _alasan_error(status, detail):
+    alasan = ("API key AI ditolak" if status in (401, 403) else
+              "Saldo AI tidak cukup" if status == 402 else
+              "Terlalu banyak permintaan ke AI" if status == 429 else
+              "Layanan AI sedang bermasalah" if status >= 500 else
+              f"AI menolak permintaan ({status})")
+    return f"{alasan}: {detail}"[:255] if detail else alasan
+
+
+def ai(system, prompt, max_tokens=500):
+    """Satu tanya-jawab ke gateway AI (bankAI), cara pemanggilannya sama dengan wabot-app."""
     if not AI_BASE_URL or not AI_API_KEY:
-        sys.exit("AI_BASE_URL dan AI_API_KEY belum diisi di .env")
+        sys.exit("AI belum dikonfigurasi (isi AI_BASE_URL dan AI_API_KEY di .env)")
     body = {
         "model": MODEL,
-        # jatah ekstra karena model reasoning bisa memakai token untuk berpikir dulu
-        "max_tokens": max_tokens + 1000,
-        "temperature": 0.9,
+        "max_tokens": max(max_tokens, 500),
+        "temperature": 0.6,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": prompt}],
     }
     err = None
     for coba in range(3):
         try:
-            r = httpx.post(f"{AI_BASE_URL}/chat/completions", json=body, timeout=90,
-                           headers={"Authorization": f"Bearer {AI_API_KEY}"})
-            if r.status_code == 429 or r.status_code >= 500:
-                raise RuntimeError(f"AI API {r.status_code}: {r.text[:200]}")
-            if r.status_code >= 400:
-                sys.exit(f"AI API {r.status_code}: {r.text[:300]}")
-            teks = (r.json()["choices"][0]["message"].get("content") or "")
-            # buang blok <think>...</think> kalau model menyertakannya di jawaban
-            return re.sub(r"<think>.*?</think>", "", teks, flags=re.S).strip()
-        except (httpx.HTTPError, RuntimeError) as e:
-            err = e
-            time.sleep(5 * (coba + 1))
-    raise RuntimeError(f"AI gagal dipanggil: {err}")
+            r = httpx.post(ai_endpoint("/chat/completions"), json=body, timeout=AI_TIMEOUT,
+                           headers={"Content-Type": "application/json",
+                                    "Authorization": f"Bearer {AI_API_KEY}"})
+        except httpx.TimeoutException:
+            err = "AI tidak merespons (timeout)"
+        except httpx.HTTPError as e:
+            err = f"Gagal menghubungi layanan AI: {e}"[:255]
+        else:
+            try:
+                j = r.json()
+            except ValueError:
+                j = {}
+            if r.is_success:
+                content = ((j.get("choices") or [{}])[0].get("message") or {}).get("content")
+                teks = rapikan(content) if isinstance(content, str) else ""
+                if not teks:
+                    raise RuntimeError("AI mengembalikan balasan kosong")
+                return teks
+            e = j.get("error")
+            detail = (e if isinstance(e, str) else (e or {}).get("message")) or j.get("message") or ""
+            err = _alasan_error(r.status_code, detail)
+            if r.status_code in (401, 402, 403):
+                sys.exit(err)          # key salah / saldo habis: percuma diulang
+            if r.status_code != 429 and r.status_code < 500:
+                raise RuntimeError(err)
+        time.sleep(5 * (coba + 1))     # timeout, 429, 5xx: coba lagi
+    raise RuntimeError(err)
 
 
 def persona():
