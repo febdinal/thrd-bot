@@ -102,12 +102,19 @@ def catat_balasan(con, target_id, root_id, username, teks):
 
 # ---------------------------------------------------------------- token
 def load_token():
+    tok = (env("THREADS_ACCESS_TOKEN", "") or "").strip()
     if TOKEN_FILE.exists():
-        return json.loads(TOKEN_FILE.read_text())
-    tok = env("THREADS_ACCESS_TOKEN", "").strip()
+        data = json.loads(TOKEN_FILE.read_text())
+        # token di .env diganti (mis. setelah menambah izin) -> pakai token baru itu
+        if not tok or data.get("env_token") in (None, tok):
+            if "env_token" not in data and tok:
+                data["env_token"] = tok
+                save_token(data)
+            return data
+        log("Token baru terdeteksi di .env, token.json diperbarui.")
     if not tok:
         sys.exit("THREADS_ACCESS_TOKEN belum diisi di .env")
-    data = {"access_token": tok, "refreshed_at": datetime.now().isoformat()}
+    data = {"access_token": tok, "env_token": tok, "refreshed_at": datetime.now().isoformat()}
     save_token(data)
     return data
 
@@ -132,7 +139,7 @@ def refresh_token(force=False):
                           "access_token": data["access_token"]}, timeout=30)
     j = r.json()
     if "access_token" in j:
-        save_token({"access_token": j["access_token"],
+        save_token({"access_token": j["access_token"], "env_token": data.get("env_token"),
                     "refreshed_at": datetime.now().isoformat()})
         log(f"Token diperpanjang, berlaku {int(j.get('expires_in', 0)) // 86400} hari.")
     else:
