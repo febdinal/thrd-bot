@@ -217,6 +217,8 @@ def rapikan(teks):
     teks = re.sub(r"^\s*[*•]\s+", "- ", teks, flags=re.M)
     teks = re.sub(r"\*\*(.+?)\*\*", r"\1", teks)
     teks = re.sub(r"__(.+?)__", r"\1", teks)
+    teks = re.sub(r"\s*[—–]\s*", ", ", teks)          # tanda pisah panjang = ciri khas AI
+    teks = re.sub(r"(?:\s*#\w+)+\s*$", "", teks)       # buang hashtag di akhir
     teks = re.sub(r"[ \t]+\n", "\n", teks)
     teks = re.sub(r"\n{3,}", "\n\n", teks)
     return teks.strip()
@@ -231,14 +233,14 @@ def _alasan_error(status, detail):
     return f"{alasan}: {detail}"[:255] if detail else alasan
 
 
-def ai(system, prompt, max_tokens=500):
+def ai(system, prompt, max_tokens=500, temperature=0.6):
     """Satu tanya-jawab ke gateway AI (bankAI), cara pemanggilannya sama dengan wabot-app."""
     if not AI_BASE_URL or not AI_API_KEY:
         sys.exit("AI belum dikonfigurasi (isi AI_BASE_URL dan AI_API_KEY di .env)")
     body = {
         "model": MODEL,
         "max_tokens": max(max_tokens, 500),
-        "temperature": 0.6,
+        "temperature": temperature,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": prompt}],
     }
@@ -281,7 +283,10 @@ def persona():
 
 ATURAN_BALAS = """
 Aturan saat membalas:
-- Balas dalam bahasa yang sama dengan komentar. Singkat (maks 2-3 kalimat, < 400 karakter).
+- Balas dalam bahasa yang sama dengan komentar. Singkat seperti orang ngetik balasan di HP:
+  biasanya 1 kalimat, paling banyak 2-3 kalimat (< 300 karakter).
+- Jangan buka dengan memuji komentarnya ("Wah pertanyaan bagus", "Setuju banget", "Makasih
+  udah sharing") dan jangan merangkum ulang komentar mereka. Langsung tanggapi isinya.
 - Nyambung dengan isi komentar, jangan generik, jangan promosi, jangan menyebar link.
 - Jangan mengarang fakta, angka, atau janji atas nama pemilik akun.
 - Kalau komentar berisi keluhan serius, pertanyaan pribadi/sensitif, ujaran kebencian,
@@ -370,6 +375,22 @@ def cmd_login():
     cmd_izin()
 
 
+BENTUK_POST = [
+    "cerita singkat kejadian yang barusan dialami (lagi ngerjain tugas/kerja/belajar)",
+    "opini pendek yang agak berat sebelah, tanpa penjelasan panjang",
+    "keluhan kecil atau hal yang bikin kesel, dengan nada bercanda",
+    "pengakuan salah atau hal bodoh yang pernah dilakukan, lalu apa yang dipelajari",
+    "satu tips kecil yang spesifik, diceritakan seperti ngobrol ke teman",
+    "pertanyaan polos yang beneran pengen tahu jawabannya",
+    "observasi random yang lucu atau aneh",
+]
+PANJANG_POST = [
+    "sangat pendek, 1 kalimat saja (di bawah 120 karakter)",
+    "pendek, 2-3 kalimat (di bawah 250 karakter)",
+    "sedang, 3-5 kalimat (di bawah 420 karakter)",
+]
+
+
 def cmd_posting():
     con = db()
     topik_f = BASE / "topik.txt"
@@ -380,12 +401,16 @@ def cmd_posting():
     t = random.choice(topik)
     terakhir = [r[0] for r in con.execute(
         "SELECT teks FROM post_saya ORDER BY waktu DESC LIMIT 10")]
-    prompt = (f"Topik: {t}\n\nPost terakhir (jangan diulang idenya):\n- " +
+    bentuk, panjang = random.choice(BENTUK_POST), random.choice(PANJANG_POST)
+    prompt = (f"Topik besar: {t}\n"
+              f"Bentuk post kali ini: {bentuk}\n"
+              f"Panjang: {panjang}\n\n"
+              "Post terakhir (jangan mirip ide, pembuka, maupun strukturnya):\n- " +
               "\n- ".join(terakhir or ["(belum ada)"]) +
-              "\n\nTulis SATU post Threads baru, maks 450 karakter, natural seperti manusia, "
-              "boleh diakhiri pertanyaan untuk memancing diskusi. Tanpa hashtag berlebihan. "
-              "Tulis HANYA isi post-nya.")
-    teks = ai(persona(), prompt, 500).strip().strip('"')
+              "\n\nTulis SATU post Threads. Ambil satu sudut kecil yang spesifik dari topiknya, "
+              "jangan merangkum topiknya. Ikuti gaya dan larangan di persona dengan ketat. "
+              "Tulis HANYA isi post-nya, tanpa tanda kutip.")
+    teks = ai(persona(), prompt, 500, temperature=0.95).strip().strip('"')
     if not teks:
         sys.exit("AI tidak menghasilkan teks, posting dibatalkan.")
     res = publish(teks)
