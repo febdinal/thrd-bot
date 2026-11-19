@@ -1,0 +1,6 @@
+# Satu topik per baris. Baris diawali # diabaikan.
+Tips belajar analisis data untuk pemula
+Pengalaman memakai AI untuk mengerjakan tugas kuliah secara etis
+Kesalahan umum saat membaca grafik dan statistik
+Tools gratis untuk visualisasi data
+Pengambilan keputusan berbasis data di UMKM
