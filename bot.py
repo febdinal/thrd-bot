@@ -4,6 +4,7 @@ Bot Threads + AI untuk dijalankan di VPS (via cron).
 
 Perintah:
   python bot.py cek              -> tes koneksi Threads & AI
+  python bot.py izin             -> lihat izin (scope) yang dimiliki token
   python bot.py posting          -> AI membuat 1 post dari topik.txt lalu memposting
   python bot.py balas            -> AI membalas komentar di post kamu + mention dari orang lain
   python bot.py cari             -> cari post orang lain berdasar kata kunci -> DRAF ke antrian
@@ -307,6 +308,27 @@ def cmd_cek():
     log(f"DRY_RUN = {DRY_RUN}")
 
 
+IZIN_DIBUTUHKAN = ["threads_basic", "threads_content_publish", "threads_manage_replies",
+                   "threads_read_replies", "threads_manage_mentions", "threads_keyword_search"]
+
+
+def cmd_izin():
+    """Tampilkan izin (scope) yang benar-benar dimiliki token yang sedang dipakai."""
+    data = load_token()
+    tok = data["access_token"]
+    log(f"Token dipakai: {tok[:8]}...{tok[-4:]} (diperbarui {data.get('refreshed_at', '?')})")
+    try:
+        info = th("GET", f"{API}/debug_token", input_token=tok).get("data", {})
+    except RuntimeError as e:
+        log("Tidak bisa membaca info token:", e)
+        return
+    punya = set(info.get("scopes") or [])
+    for s in IZIN_DIBUTUHKAN:
+        log(f"  {'OK   ' if s in punya else 'TIDAK'}  {s}")
+    if info.get("expires_at"):
+        log("Kedaluwarsa:", datetime.fromtimestamp(info["expires_at"]).strftime("%Y-%m-%d"))
+
+
 def cmd_posting():
     con = db()
     topik_f = BASE / "topik.txt"
@@ -491,6 +513,8 @@ def main():
         refresh_token()
     if c == "cek":
         cmd_cek()
+    elif c == "izin":
+        cmd_izin()
     elif c == "posting":
         cmd_posting()
     elif c == "balas":
