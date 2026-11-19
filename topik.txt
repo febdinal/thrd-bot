@@ -1,6 +1,18 @@
 # Satu topik per baris. Baris diawali # diabaikan.
-Tips belajar analisis data untuk pemula
-Pengalaman memakai AI untuk mengerjakan tugas kuliah secara etis
-Kesalahan umum saat membaca grafik dan statistik
-Tools gratis untuk visualisasi data
-Pengambilan keputusan berbasis data di UMKM
+# Topik dipilih acak, lalu AI mengambil satu momen kecil dari topik itu.
+Pagi yang berantakan karena telat bangun
+Capek kuliah sambil ngerjain tugas yang gak habis-habis
+Makan sendirian dan hal-hal kecil yang kepikiran
+Kejadian lucu atau malu-maluin di jalan atau di angkutan umum
+Ditanya kapan lulus, kapan nikah, atau kapan kerja tetap
+Kangen rumah dan telepon dari orang tua
+Begadang dan menyesal besok paginya
+Uang bulanan yang tinggal sedikit di akhir bulan
+Teman yang mulai jarang ngobrol karena sibuk masing-masing
+Hal sepele yang bikin senang hari ini
+Hujan, macet, dan rencana yang batal
+Rasa minder lihat pencapaian orang lain di media sosial
+Kebiasaan buruk yang susah dihilangin
+Momen awkward sama orang yang baru kenal
+Nunggu balasan chat, dosen, atau kabar penting
+Weekend yang rencananya produktif tapi berakhir rebahan

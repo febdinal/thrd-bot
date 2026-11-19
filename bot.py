@@ -287,7 +287,11 @@ def ai(system, prompt, max_tokens=500, temperature=0.6):
 
 def persona():
     f = BASE / "persona.txt"
-    return f.read_text(encoding="utf-8") if f.exists() else "Kamu pengelola akun Threads."
+    if not f.exists():
+        return "Kamu pengelola akun Threads."
+    # baris diawali # adalah catatan untuk pemilik, tidak dikirim ke AI
+    return "\n".join(b for b in f.read_text(encoding="utf-8").splitlines()
+                     if not b.lstrip().startswith("#")).strip()
 
 
 ATURAN_BALAS = """
@@ -386,13 +390,13 @@ def cmd_login():
 
 
 BENTUK_POST = [
-    "cerita singkat kejadian yang barusan dialami (lagi ngerjain tugas/kerja/belajar)",
-    "opini pendek yang agak berat sebelah, tanpa penjelasan panjang",
-    "keluhan kecil atau hal yang bikin kesel, dengan nada bercanda",
-    "pengakuan salah atau hal bodoh yang pernah dilakukan, lalu apa yang dipelajari",
-    "satu tips kecil yang spesifik, diceritakan seperti ngobrol ke teman",
-    "pertanyaan polos yang beneran pengen tahu jawabannya",
-    "observasi random yang lucu atau aneh",
+    "cerita kejadian yang barusan dialami hari ini, diceritakan apa adanya",
+    "curhat ringan soal perasaan hari ini (capek, kesel, bingung, atau senang hal sepele)",
+    "momen malu-maluin atau konyol yang baru terjadi",
+    "hal kecil yang tiba-tiba kepikiran waktu lagi sendirian",
+    "keluhan kecil sehari-hari dengan nada bercanda",
+    "cerita singkat yang berakhir menggantung, tanpa kesimpulan",
+    "satu kalimat isi kepala yang random, kayak nge-tweet",
 ]
 PANJANG_POST = [
     "sangat pendek, 1 kalimat saja (di bawah 120 karakter)",
@@ -417,8 +421,10 @@ def cmd_posting():
               f"Panjang: {panjang}\n\n"
               "Post terakhir (jangan mirip ide, pembuka, maupun strukturnya):\n- " +
               "\n- ".join(terakhir or ["(belum ada)"]) +
-              "\n\nTulis SATU post Threads. Ambil satu sudut kecil yang spesifik dari topiknya, "
-              "jangan merangkum topiknya. Ikuti gaya dan larangan di persona dengan ketat. "
+              "\n\nTulis SATU post Threads. Ambil satu momen kecil yang spesifik dari topiknya, "
+              "jangan merangkum topiknya. Detail cerita boleh dikarang, asal tidak bertentangan "
+              "dengan 'Fakta tentang aku' dan post terakhir di atas. "
+              "Ikuti gaya dan larangan di persona dengan ketat. "
               "Tulis HANYA isi post-nya, tanpa tanda kutip.")
     teks = ai(persona(), prompt, 500, temperature=0.95).strip().strip('"')
     if not teks:
