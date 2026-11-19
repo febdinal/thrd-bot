@@ -5,6 +5,7 @@ Bot Threads + AI untuk dijalankan di VPS (via cron).
 Perintah:
   python bot.py cek              -> tes koneksi Threads & AI
   python bot.py izin             -> lihat izin (scope) yang dimiliki token
+  python bot.py login            -> buat token via OAuth dengan semua izin (termasuk mentions)
   python bot.py posting          -> AI membuat 1 post dari topik.txt lalu memposting
   python bot.py balas            -> AI membalas komentar di post kamu + mention dari orang lain
   python bot.py cari             -> cari post orang lain berdasar kata kunci -> DRAF ke antrian
@@ -329,6 +330,46 @@ def cmd_izin():
         log("Kedaluwarsa:", datetime.fromtimestamp(info["expires_at"]).strftime("%Y-%m-%d"))
 
 
+def cmd_login():
+    """Buat token lewat OAuth dengan scope eksplisit (generator di dashboard hanya memberi
+    izin dasar). Butuh THREADS_APP_ID, THREADS_APP_SECRET, THREADS_REDIRECT_URI di .env."""
+    from urllib.parse import parse_qs, urlencode, urlparse
+    app_id = (env("THREADS_APP_ID", "") or "").strip()
+    secret = (env("THREADS_APP_SECRET", "") or "").strip()
+    redirect = (env("THREADS_REDIRECT_URI", "") or "").strip()
+    if not (app_id and secret and redirect):
+        sys.exit("Isi THREADS_APP_ID, THREADS_APP_SECRET, THREADS_REDIRECT_URI di .env dulu.")
+    scope = [s for s in IZIN_DIBUTUHKAN if s != "threads_keyword_search" or
+             env("MINTA_KEYWORD_SEARCH", "false", bool)]
+    url = "https://threads.net/oauth/authorize?" + urlencode({
+        "client_id": app_id, "redirect_uri": redirect, "scope": ",".join(scope),
+        "response_type": "code"})
+    print("\n1) Buka link ini di browser (login sebagai akun bot), lalu setujui semua izin:\n")
+    print(url)
+    print("\n2) Browser akan pindah ke alamat redirect (halamannya boleh error/kosong).")
+    masukan = input("   Tempel SELURUH alamat dari address bar di sini: ").strip()
+    code = parse_qs(urlparse(masukan).query).get("code", [masukan])[0]
+    code = code.split("#")[0].strip()
+
+    r = httpx.post("https://graph.threads.net/oauth/access_token", timeout=30, data={
+        "client_id": app_id, "client_secret": secret, "grant_type": "authorization_code",
+        "redirect_uri": redirect, "code": code})
+    j = r.json()
+    if "access_token" not in j:
+        sys.exit(f"Gagal menukar code: {j}")
+    r = httpx.get("https://graph.threads.net/access_token", timeout=30, params={
+        "grant_type": "th_exchange_token", "client_secret": secret,
+        "access_token": j["access_token"]})
+    j2 = r.json()
+    if "access_token" not in j2:
+        sys.exit(f"Gagal membuat token jangka panjang: {j2}")
+    save_token({"access_token": j2["access_token"],
+                "env_token": (env("THREADS_ACCESS_TOKEN", "") or "").strip(),
+                "refreshed_at": datetime.now().isoformat()})
+    log(f"Token baru tersimpan di token.json, berlaku {int(j2.get('expires_in', 0)) // 86400} hari.")
+    cmd_izin()
+
+
 def cmd_posting():
     con = db()
     topik_f = BASE / "topik.txt"
@@ -509,6 +550,8 @@ def main():
         print(__doc__)
         return
     c = sys.argv[1]
+    if c == "login":
+        return cmd_login()
     if c != "refresh-token":
         refresh_token()
     if c == "cek":
